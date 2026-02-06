@@ -1014,10 +1014,17 @@ class DistillationLossFn(LossFunction):
         cp_size = 1 if cp_group is None else torch.distributed.get_world_size(cp_group)
 
         # Ensure float32 for stability (match other losses)
+
+        # next token logits is local to one GPU -- post-sharded tensor of size [B, S_local, V_local]
+        # S_local is depenent on context parallelism 
+        # V_local is dependent on vocab/tensor parallelism
         next_token_logits = next_token_logits.to(torch.float32)
         per_token_kl = None
+
         # Preferred truncated-KL path: teacher provides top-k support per position
         teacher_topk_logits = data["teacher_topk_logits"]  # [B, S, k]
+
+        # locations (vocab) of the top-k logits per position -- sparsity type thing 
         teacher_topk_indices = data["teacher_topk_indices"]  # [B, S, k]
 
         if teacher_topk_indices.shape[-1] <= 0:
@@ -1032,13 +1039,19 @@ class DistillationLossFn(LossFunction):
                 "vocab_parallel_rank must be provided when vocab_parallel_group is provided"
             )
             V_local = int(next_token_logits.shape[-1])
+
+            # which chunk are we in the tensor-parallelism dimension? 
             vocab_start_index = vocab_parallel_rank * V_local
             vocab_end_index = (vocab_parallel_rank + 1) * V_local
             parallel_group = vocab_parallel_group
             logits_tensor = next_token_logits
         elif isinstance(next_token_logits, torch.distributed.tensor.DTensor):
+
+            # in the device mesh, 
             device_mesh = next_token_logits.device_mesh
             tp_group = device_mesh.get_group("tp")
+
+            # vocab dimension is split across tp ranks 
             tp_rank = tp_group.rank()
             local_student_logits = next_token_logits.to_local()
             V_local = int(local_student_logits.shape[-1])
@@ -1061,11 +1074,14 @@ class DistillationLossFn(LossFunction):
             parallel_group = None
             logits_tensor = next_token_logits
 
+
         # Process based on zero_outside_topk setting
         if self.zero_outside_topk and parallel_group is not None:
             # Distributed processing with chunking
             indices_local = teacher_topk_indices
             pad_len = 0
+
+            # context parallel padding? 
             if cp_size > 1:
                 pad_len = logits_tensor.shape[1] * cp_size - indices_local.shape[1]
                 if pad_len > 0:

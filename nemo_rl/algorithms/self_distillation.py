@@ -70,7 +70,7 @@ from nemo_rl.utils.timer import TimeoutChecker, Timer
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 
 
-class DistillationConfig(TypedDict):
+class SelfDistillationConfig(TypedDict):
     # Training configuration
     num_prompts_per_step: int
     num_generations_per_prompt: int
@@ -88,7 +88,7 @@ class DistillationConfig(TypedDict):
     seed: int
 
 
-class DistillationSaveState(TypedDict):
+class SelfDistillationSaveState(TypedDict):
     total_steps: int  # Track total number of steps across all epochs
     current_epoch: int  # Track current epoch
     current_step: int  # Track step within current epoch
@@ -368,38 +368,38 @@ def setup(
             flush=True,
         )
 
-    # ==========================
-    #      Teacher Policy
-    # ==========================
-    print("\n▶ Setting up teacher policy...", flush=True)
-    # Checkpoint paths
-    weights_path = None
-    optimizer_path = None
+    # # ==========================
+    # #      Teacher Policy
+    # # ==========================
+    # print("\n▶ Setting up teacher policy...", flush=True)
+    # # Checkpoint paths
+    # weights_path = None
+    # optimizer_path = None
 
-    if not bool(os.getenv("NRL_SKIP_DISTILLATION_TOKENIZER_CHECK", False)):
-        check_vocab_equality(
-            tokenizer, policy_config["model_name"], teacher_config["model_name"]
-        )
+    # if not bool(os.getenv("NRL_SKIP_DISTILLATION_TOKENIZER_CHECK", False)):
+    #     check_vocab_equality(
+    #         tokenizer, policy_config["model_name"], teacher_config["model_name"]
+    #     )
 
-    if "megatron_cfg" in teacher_config and teacher_config["megatron_cfg"]["enabled"]:
-        ## NOTE: this is equal to the total number of scheduler steps
-        total_train_iters = min(
-            distillation_config["max_num_steps"],
-            distillation_config["max_num_epochs"] * len(dataloader),
-        )
-        teacher_config["megatron_cfg"]["train_iters"] = total_train_iters
+    # if "megatron_cfg" in teacher_config and teacher_config["megatron_cfg"]["enabled"]:
+    #     ## NOTE: this is equal to the total number of scheduler steps
+    #     total_train_iters = min(
+    #         distillation_config["max_num_steps"],
+    #         distillation_config["max_num_epochs"] * len(dataloader),
+    #     )
+    #     teacher_config["megatron_cfg"]["train_iters"] = total_train_iters
 
-    teacher_policy = Policy(
-        name_prefix="teacher",
-        cluster=train_cluster,
-        config=teacher_config,
-        tokenizer=tokenizer,
-        weights_path=weights_path,
-        optimizer_path=optimizer_path,
-        init_optimizer=False,
-        init_reference_model=False,
-    )
-    teacher_policy.offload_after_refit()
+    # teacher_policy = Policy(
+    #     name_prefix="teacher",
+    #     cluster=train_cluster,
+    #     config=teacher_config,
+    #     tokenizer=tokenizer,
+    #     weights_path=weights_path,
+    #     optimizer_path=optimizer_path,
+    #     init_optimizer=False,
+    #     init_reference_model=False,
+    # )
+    # teacher_policy.offload_after_refit()
 
     # ==========================
     #    Student Generation Interface
