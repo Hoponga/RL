@@ -86,8 +86,11 @@ def setup_data_with_envs(
         data_list.append(data)
         # bind task_name to task_data_processors and task_to_env
         task_name = data.task_name
+        print(data.task_spec, data.processor)
         task_data_processors[task_name] = (data.task_spec, data.processor)
         task_to_env[task_name] = envs[cfg["env_name"]]
+
+    print(data_list)
 
     merged_data = concatenate_datasets([data.dataset for data in data_list])
     dataset = AllTaskProcessedDataset(
