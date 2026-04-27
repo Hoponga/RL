@@ -1,9 +1,8 @@
-# Best-of-N Self-Distillation Configuration
-# Samples N rollouts per prompt; uses a correct rollout as teacher COT.
-# Falls back to offline trace (deepseek_reasoning + ground_truth_solution) when all N fail.
+# Self-distillation summarizer training config.
+# Single policy plays teacher (full prefix), student (summary prefix), and summarizer.
 distillation:
   num_prompts_per_step: 2
-  num_generations_per_prompt: 4   # N for best-of-N selection
+  num_generations_per_prompt: 1
   max_rollout_turns: 1
   max_num_steps: 1000
   max_num_epochs: 10
@@ -14,12 +13,18 @@ distillation:
   max_val_samples: 256
   topk_logits_k: 200
   seed: 42
-  # EMA Teacher Configuration:
-  # - ema_decay: 1.0 (default) = teacher shares parameters with student (standard self-distillation)
-  # - ema_decay: 0.999 = separate EMA teacher that slowly tracks student (teacher = 0.999*teacher + 0.001*student)
-  # - ema_decay: 0.9999 = slower EMA update (more stable but less responsive to student changes)
-  # Set ema_decay < 1.0 to enable a separate teacher policy with EMA updates
-  ema_decay: 0.999999
+
+  # Reasoning trace chunking
+  chunk_size: 256          # tokens per chunk
+  min_prefix_chunks: 1     # at least this many chunks summarized
+  max_prefix_chunks: 4     # at most this many
+  continuation_window: 128 # short-horizon length for KL/reward
+  summary_max_tokens: 128
+  summary_temperature: 0.7
+  summary_instruction: "\n\nBriefly summarize the reasoning so far in 2-3 sentences, preserving the key intermediate results that the next step will rely on. Then continue solving the problem.\nSummary: "
+  reward_baseline: "mean_std"
+  summarizer_loss_weight: 1.0
+  distillation_loss_weight: 1.0
 
 loss_fn:
   kl_type: "jsd"
@@ -28,7 +33,7 @@ loss_fn:
 
 checkpointing:
   enabled: true
-  checkpoint_dir: "checkpoints/self-distillation-bon-${policy.model_name}"
+  checkpoint_dir: "checkpoints/self-distillation-summarizer-${policy.model_name}"
   metric_name: "val:accuracy"
   higher_is_better: true
   keep_top_k: 3
@@ -38,14 +43,14 @@ checkpointing:
   model_save_format: "safetensors"
   save_consolidated: false
 
-policy: &POLICY_BASE
+policy:
   model_name: "Qwen/Qwen3-1.7B"
   tokenizer:
     name: ${..model_name}
-    chat_template_kwargs: null # for now dont use thinking template because the <think> tags messes with teacher prompt format
-  train_global_batch_size: 8   # num_prompts_per_step * num_generations_per_prompt
+    chat_template_kwargs: null
+  train_global_batch_size: 2
   train_micro_batch_size: 1
-  generation_batch_size: 8
+  generation_batch_size: 2
   logprob_batch_size: 1
   max_total_sequence_length: 16384
   precision: "bfloat16"
@@ -53,7 +58,7 @@ policy: &POLICY_BASE
 
   offload_optimizer_for_logprob: false
 
-  dtensor_cfg: &DTENSOR_BASE
+  dtensor_cfg:
     enabled: true
     _v2: true
     cpu_offload: False
@@ -70,7 +75,7 @@ policy: &POLICY_BASE
       dropout: 0.0
       dropout_position: "post"
       lora_A_init: "xavier"
-      use_triton: false  # must be false when tensor_parallel_size > 1
+      use_triton: false
 
   dynamic_batching:
     enabled: true
@@ -91,14 +96,14 @@ policy: &POLICY_BASE
   optimizer:
     name: "torch.optim.AdamW"
     kwargs:
-      lr: 2.0e-5
+      lr: 1.0e-5
       weight_decay: 0.01
       betas: [0.9, 0.999]
       eps: 1e-8
       foreach: False
       fused: False
 
-  megatron_cfg: &MEGATRON_BASE
+  megatron_cfg:
     enabled: false
     empty_unused_memory_level: 0
     activation_checkpointing: false
@@ -127,24 +132,20 @@ policy: &POLICY_BASE
 
     optimizer:
       optimizer: "adam"
-      lr: 2.00001e-5
-      min_lr: 2.0e-5
+      lr: 1.00001e-5
+      min_lr: 1.0e-5
       weight_decay: 0.01
       bf16: true
       fp16: false
       params_dtype: "float32"
-
       adam_beta1: 0.9
       adam_beta2: 0.999
       adam_eps: 1e-8
-
       sgd_momentum: 0.9
-
       use_distributed_optimizer: true
       use_precision_aware_optimizer: true
       optimizer_cpu_offload: false
       optimizer_offload_fraction: 0.0
-
       clip_grad: ${policy.max_grad_norm}
 
     scheduler:
@@ -154,7 +155,7 @@ policy: &POLICY_BASE
       lr_decay_style: "constant"
       lr_decay_iters: 1000
       lr_warmup_iters: 10
-      lr_warmup_init: 2.0e-6
+      lr_warmup_init: 1.0e-6
 
     distributed_data_parallel_config:
       grad_reduce_in_fp32: false
@@ -178,7 +179,7 @@ policy: &POLICY_BASE
   generation:
     backend: "vllm"
     max_new_tokens: ${..max_total_sequence_length}
-    temperature: 1.2
+    temperature: 1.0
     top_p: 1.0
     top_k: null
     stop_token_ids: null
@@ -197,27 +198,21 @@ policy: &POLICY_BASE
       num_last_layers_in_bf16: 0
       num_first_layers_in_bf16: 0
       distributed_executor_backend: null
-
     colocated:
       enabled: true
       resources:
         gpus_per_node: null
         num_nodes: null
 
-# No separate teacher block for self-distillation
-
 data:
   max_input_seq_length: ${policy.max_total_sequence_length}
   shuffle: true
-
   train:
     dataset_name: OpenThoughts
     processor: "openthoughts_processor"
-    # split: "train"
   validation:
     dataset_name: AIME2024
     repeat: 8
-    # split: "train"  # or "validation" if you have one
   default:
     prompt_file: "examples/prompts/cot.txt"
     system_prompt_file: null
@@ -228,7 +223,7 @@ env:
     num_workers: 8
 
 logger:
-  log_dir: "logs/self-distillation-best-of-n"
+  log_dir: "logs/self-distillation-summarizer"
   num_val_samples_to_print: 5
   wandb_enabled: true
   tensorboard_enabled: true
@@ -237,15 +232,15 @@ logger:
   monitor_gpus: true
   wandb:
     project: "nemo-distillation"
-    name: "self-distillation-bon-${data.train.dataset_name}-${policy.model_name}-${loss_fn.kl_type}-N${distillation.num_generations_per_prompt}"
+    name: "summarizer-${data.train.dataset_name}-${policy.model_name}"
   swanlab:
     project: "nemo-distillation"
-    name: "self-distillation-bon-${data.train.dataset_name}-${policy.model_name}-${loss_fn.kl_type}-N${distillation.num_generations_per_prompt}"
+    name: "summarizer-${data.train.dataset_name}-${policy.model_name}"
   tensorboard:
-    log_dir: "tb_logs-self-distillation-bon-${data.train.dataset_name}"
+    log_dir: "tb_logs-self-distillation-summarizer-${data.train.dataset_name}"
   mlflow:
     experiment_name: "distillation-dev"
-    run_name: "self-distillation-bon-math-cl-logger"
+    run_name: "self-distillation-summarizer"
   gpu_monitoring:
     collection_interval: 10
     flush_interval: 10

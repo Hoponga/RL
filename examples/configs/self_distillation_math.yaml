@@ -30,13 +30,14 @@ checkpointing:
   metric_name: "val:accuracy"
   higher_is_better: true
   keep_top_k: 3
+  save_optimizer: true
   save_period: 100
   checkpoint_must_save_by: null
   model_save_format: "safetensors"
   save_consolidated: false
 
 policy: &POLICY_BASE
-  model_name: "Qwen/Qwen3-4B-Instruct-2507"
+  model_name: "Qwen/Qwen3-1.7B"
   tokenizer:
     name: ${..model_name}
     chat_template_kwargs: null # for now dont use thinking template because the <think> tags messes with teacher prompt format 
